@@ -12,7 +12,6 @@ public class ARTrashDetector : MonoBehaviour
     public RawImage debugRawImage;
     public Text debugTextPrefab;
     
-    // 바운딩 박스 최대 거리 설정
     public float maxBoundingBoxDistance = 5.0f;
     
     private Model runtimeModel;
@@ -164,7 +163,7 @@ public class ARTrashDetector : MonoBehaviour
         
                 string className = trashCategories[classIndex];
         
-                float detectionThreshold = 0.98f;
+                float detectionThreshold = 0.9f;
                 if (maxProb < detectionThreshold)
                 {
                     if (currentBboxObject != null)
@@ -201,18 +200,18 @@ public class ARTrashDetector : MonoBehaviour
     private void DisplayImprovedBoundingBox(float x, float y, float width, float height, string text)
     {
         Camera arCamera = arCameraManager.GetComponent<Camera>();
-        
+    
         float depth = maxBoundingBoxDistance;
-        
+    
         float halfWidth = width / 2.0f;
         float halfHeight = height / 2.0f;
-        
+    
         Vector2[] corners = new Vector2[4];
         corners[0] = new Vector2(x - halfWidth, y - halfHeight); // 좌하단
         corners[1] = new Vector2(x + halfWidth, y - halfHeight); // 우하단
         corners[2] = new Vector2(x + halfWidth, y + halfHeight); // 우상단
         corners[3] = new Vector2(x - halfWidth, y + halfHeight); // 좌상단
-        
+    
         Vector3[] worldCorners = new Vector3[4];
         for (int i = 0; i < 4; i++)
         {
@@ -223,7 +222,7 @@ public class ARTrashDetector : MonoBehaviour
             );
             worldCorners[i] = arCamera.ScreenToWorldPoint(screenPos);
         }
-        
+    
         if (boxLineRenderer != null)
         {
             boxLineRenderer.SetPosition(0, worldCorners[0]);
@@ -231,20 +230,20 @@ public class ARTrashDetector : MonoBehaviour
             boxLineRenderer.SetPosition(2, worldCorners[2]);
             boxLineRenderer.SetPosition(3, worldCorners[3]);
             boxLineRenderer.SetPosition(4, worldCorners[0]);
-            
+        
             currentBboxObject.transform.position = Vector3.zero;
             currentBboxObject.SetActive(true);
         }
-        
+    
         if (currentDebugText == null && debugTextPrefab != null)
         {
             GameObject textObj = Instantiate(debugTextPrefab.gameObject);
             currentDebugText = textObj.GetComponent<Text>();
-            
+        
             currentDebugText.color = Color.white;
             currentDebugText.fontStyle = FontStyle.Bold;
             currentDebugText.alignment = TextAnchor.MiddleCenter;
-            
+        
             Shadow shadow = currentDebugText.gameObject.GetComponent<Shadow>();
             if (shadow == null)
             {
@@ -253,37 +252,38 @@ public class ARTrashDetector : MonoBehaviour
             shadow.effectColor = Color.black;
             shadow.effectDistance = new Vector2(2f, -2f);
         }
-        
+    
         if (currentDebugText != null)
         {
             Vector3 centerPos = (worldCorners[0] + worldCorners[2]) / 2f;
-            
+        
             float boxHeight = Vector3.Distance(worldCorners[0], worldCorners[3]);
             Vector3 textPos = centerPos + arCamera.transform.up * boxHeight * 0.5f;
             currentDebugText.transform.position = textPos;
-            
+        
             currentDebugText.transform.rotation = arCamera.transform.rotation;
-            
+        
             currentDebugText.text = text;
-            
+        
             float distanceToCamera = Vector3.Distance(centerPos, arCamera.transform.position);
             float textScaleFactor = distanceToCamera * 0.05f;
             currentDebugText.transform.localScale = new Vector3(textScaleFactor, textScaleFactor, textScaleFactor);
-            
+        
             if (currentDebugText.canvas != null)
             {
                 currentDebugText.canvas.sortingOrder = 999;
             }
-            
+        
             currentDebugText.gameObject.SetActive(true);
-            
+        
             Debug.Log($"텍스트 설정: 위치={textPos}, 스케일={textScaleFactor}, 거리={distanceToCamera}");
         }
         else
-        {
+       {
             Debug.LogError("디버그 텍스트를 생성하지 못했습니다. debugTextPrefab이 할당되었는지 확인하세요.");
         }
     }
+
 
     Texture2D ScaleTexture(Texture2D source, int targetWidth, int targetHeight)
     {
