@@ -10,14 +10,18 @@ public class ARTrashDetector : MonoBehaviour
     public ARCameraManager arCameraManager;
     public NNModel onnxModelAsset;
     public RawImage debugRawImage;
-    public Text debugText;
-    public GameObject bboxPrefab;
+    public Text debugTextPrefab;
+    
+    // 바운딩 박스 최대 거리 설정
+    public float maxBoundingBoxDistance = 5.0f;
     
     private Model runtimeModel;
     private IWorker worker;
     private const int IMG_WIDTH = 224;
     private const int IMG_HEIGHT = 224;
     private GameObject currentBboxObject;
+    private Text currentDebugText;
+    private LineRenderer boxLineRenderer;
     
     private readonly string[] trashCategories = {
         "Aluminium foil", "Bottle cap", "Bottle", "Broken glass", "Can", 
@@ -33,9 +37,29 @@ public class ARTrashDetector : MonoBehaviour
         else
             Debug.Log("[ARTrashDetector] arCameraManager 할당됨: " + arCameraManager.name);
 
+        InitializeBoundingBox();
+
         runtimeModel = ModelLoader.Load(onnxModelAsset);
         worker = WorkerFactory.CreateWorker(WorkerFactory.Type.ComputePrecompiled, runtimeModel);
         Debug.Log("ONNX 모델 로드 완료");
+    }
+
+    private void InitializeBoundingBox()
+    {
+        currentBboxObject = new GameObject("BoundingBox");
+        boxLineRenderer = currentBboxObject.AddComponent<LineRenderer>();
+
+        // LineRenderer 설정
+        boxLineRenderer.startWidth = 0.02f;
+        boxLineRenderer.endWidth = 0.02f;
+        boxLineRenderer.positionCount = 5;
+        boxLineRenderer.loop = true;
+        boxLineRenderer.material = new Material(Shader.Find("Sprites/Default"));
+        boxLineRenderer.startColor = Color.green;
+        boxLineRenderer.endColor = Color.green;
+        boxLineRenderer.useWorldSpace = true;
+        
+        currentBboxObject.SetActive(false);
     }
 
     void OnEnable()
@@ -81,7 +105,6 @@ public class ARTrashDetector : MonoBehaviour
             transformation = XRCpuImage.Transformation.MirrorY
         };
 
-        // 변환할 Texture2D 생성
         Texture2D texture = new Texture2D(cpuImage.width, cpuImage.height, TextureFormat.RGB24, false);
         var rawTextureData = texture.GetRawTextureData<byte>();
         try
@@ -101,32 +124,26 @@ public class ARTrashDetector : MonoBehaviour
             cpuImage.Dispose();
         }
 
-        // 모델 입력 사이즈에 맞게 텍스처 리사이즈
         Texture2D resized = ScaleTexture(texture, IMG_WIDTH, IMG_HEIGHT);
         Debug.Log("텍스처 리사이즈 완료");
 
-        // 디버그용 RawImage 업데이트
         if (debugRawImage != null)
             debugRawImage.texture = resized;
 
-        // 모델 추론 (다중 출력: 바운딩 박스 + 클래스)
         using (Tensor input = new Tensor(resized, channels: 3))
         {
             try
             {
                 worker.Execute(input);
         
-                // 다중 출력 텐서 가져오기
                 Tensor bboxOutput = worker.PeekOutput("output_0");
                 Tensor classOutput = worker.PeekOutput("output_1");
 
-                // 바운딩 박스 좌표 (출력값은 0~1 사이)
                 float x = bboxOutput[0];
                 float y = bboxOutput[1];
                 float w = bboxOutput[2];
                 float h = bboxOutput[3];
         
-                // 클래스 예측 결과: softmax 확률 벡터의 모든 값을 출력해서 디버깅
                 string classProbabilities = "";
                 for (int i = 0; i < classOutput.length; i++)
                 {
@@ -134,7 +151,6 @@ public class ARTrashDetector : MonoBehaviour
                 }
                 Debug.Log("클래스 확률 분포: " + classProbabilities);
 
-                // softmax 확률 벡터에서 argmax 계산
                 int classIndex = 0;
                 float maxProb = 0f;
                 for (int i = 0; i < classOutput.length; i++)
@@ -148,18 +164,27 @@ public class ARTrashDetector : MonoBehaviour
         
                 string className = trashCategories[classIndex];
         
-                // 디버그 텍스트 업데이트 (바운딩 박스 좌표 및 감지 결과)
-                if (debugText != null)
+                float detectionThreshold = 0.98f;
+                if (maxProb < detectionThreshold)
                 {
-                    debugText.text = $"위치: x:{x:F2}, y:{y:F2}, w:{w:F2}, h:{h:F2}\n" +
-                                     $"감지된 쓰레기: {className} ({maxProb:P1})";
+                    if (currentBboxObject != null)
+                    {
+                        currentBboxObject.SetActive(false);
+                    }
+                    if (currentDebugText != null)
+                    {
+                        currentDebugText.gameObject.SetActive(false);
+                    }
+                    Debug.Log("객체 감지 실패 (신뢰도 낮음)");
                 }
-        
-                Debug.Log($"모델 추론 완료: bbox=({x}, {y}, {w}, {h}), class: {className} ({maxProb:P1})");
-        
-                // AR 환경에 바운딩 박스 표시
-                DisplayBoundingBox(x, y, w, h);
-        
+                else
+                {
+                    string detectionText = $"감지된 쓰레기: {className} ({maxProb:P1})";
+                    Debug.Log($"모델 추론 완료: bbox=({x:F2}, {y:F2}, {w:F2}, {h:F2}), class: {className} ({maxProb:P1})");
+                    
+                    DisplayImprovedBoundingBox(x, y, w, h, detectionText);
+                }
+
                 bboxOutput.Dispose();
                 classOutput.Dispose();
             }
@@ -173,44 +198,93 @@ public class ARTrashDetector : MonoBehaviour
         Destroy(resized);
     }
     
-    // AR 환경에 바운딩 박스 표시
-    private void DisplayBoundingBox(float x, float y, float width, float height)
+    private void DisplayImprovedBoundingBox(float x, float y, float width, float height, string text)
     {
-        // 기존 바운딩 박스 제거
-        if (currentBboxObject != null)
-            Destroy(currentBboxObject);
-            
-        if (bboxPrefab != null)
+        Camera arCamera = arCameraManager.GetComponent<Camera>();
+        
+        float depth = maxBoundingBoxDistance;
+        
+        float halfWidth = width / 2.0f;
+        float halfHeight = height / 2.0f;
+        
+        Vector2[] corners = new Vector2[4];
+        corners[0] = new Vector2(x - halfWidth, y - halfHeight); // 좌하단
+        corners[1] = new Vector2(x + halfWidth, y - halfHeight); // 우하단
+        corners[2] = new Vector2(x + halfWidth, y + halfHeight); // 우상단
+        corners[3] = new Vector2(x - halfWidth, y + halfHeight); // 좌상단
+        
+        Vector3[] worldCorners = new Vector3[4];
+        for (int i = 0; i < 4; i++)
         {
-            // 화면 좌표를 AR 환경 좌표로 변환
-            Vector2 screenPoint = new Vector2(
-                x * Screen.width,
-                y * Screen.height
+            Vector3 screenPos = new Vector3(
+                corners[i].x * Screen.width,
+                corners[i].y * Screen.height,
+                depth
             );
+            worldCorners[i] = arCamera.ScreenToWorldPoint(screenPos);
+        }
+        
+        if (boxLineRenderer != null)
+        {
+            boxLineRenderer.SetPosition(0, worldCorners[0]);
+            boxLineRenderer.SetPosition(1, worldCorners[1]);
+            boxLineRenderer.SetPosition(2, worldCorners[2]);
+            boxLineRenderer.SetPosition(3, worldCorners[3]);
+            boxLineRenderer.SetPosition(4, worldCorners[0]);
             
-            // AR 레이캐스트로 실제 위치 찾기
-            var arRaycastManager = FindObjectOfType<ARRaycastManager>();
-            List<ARRaycastHit> hits = new List<ARRaycastHit>();
+            currentBboxObject.transform.position = Vector3.zero;
+            currentBboxObject.SetActive(true);
+        }
+        
+        if (currentDebugText == null && debugTextPrefab != null)
+        {
+            GameObject textObj = Instantiate(debugTextPrefab.gameObject);
+            currentDebugText = textObj.GetComponent<Text>();
             
-            if (arRaycastManager.Raycast(screenPoint, hits, TrackableType.PlaneWithinPolygon))
+            currentDebugText.color = Color.white;
+            currentDebugText.fontStyle = FontStyle.Bold;
+            currentDebugText.alignment = TextAnchor.MiddleCenter;
+            
+            Shadow shadow = currentDebugText.gameObject.GetComponent<Shadow>();
+            if (shadow == null)
             {
-                var hitPose = hits[0].pose;
-                
-                // 바운딩 박스 생성
-                currentBboxObject = Instantiate(bboxPrefab, hitPose.position, hitPose.rotation);
-                
-                // 크기 조정
-                float scaleFactor = 0.5f;
-                currentBboxObject.transform.localScale = new Vector3(
-                    width * scaleFactor,
-                    height * scaleFactor / 2,
-                    0.01f // 두께
-                );
+                shadow = currentDebugText.gameObject.AddComponent<Shadow>();
             }
+            shadow.effectColor = Color.black;
+            shadow.effectDistance = new Vector2(2f, -2f);
+        }
+        
+        if (currentDebugText != null)
+        {
+            Vector3 centerPos = (worldCorners[0] + worldCorners[2]) / 2f;
+            
+            float boxHeight = Vector3.Distance(worldCorners[0], worldCorners[3]);
+            Vector3 textPos = centerPos + arCamera.transform.up * boxHeight * 0.5f;
+            currentDebugText.transform.position = textPos;
+            
+            currentDebugText.transform.rotation = arCamera.transform.rotation;
+            
+            currentDebugText.text = text;
+            
+            float distanceToCamera = Vector3.Distance(centerPos, arCamera.transform.position);
+            float textScaleFactor = distanceToCamera * 0.05f;
+            currentDebugText.transform.localScale = new Vector3(textScaleFactor, textScaleFactor, textScaleFactor);
+            
+            if (currentDebugText.canvas != null)
+            {
+                currentDebugText.canvas.sortingOrder = 999;
+            }
+            
+            currentDebugText.gameObject.SetActive(true);
+            
+            Debug.Log($"텍스트 설정: 위치={textPos}, 스케일={textScaleFactor}, 거리={distanceToCamera}");
+        }
+        else
+        {
+            Debug.LogError("디버그 텍스트를 생성하지 못했습니다. debugTextPrefab이 할당되었는지 확인하세요.");
         }
     }
 
-    // 텍스처 리사이즈 함수
     Texture2D ScaleTexture(Texture2D source, int targetWidth, int targetHeight)
     {
         RenderTexture rt = RenderTexture.GetTemporary(targetWidth, targetHeight);
