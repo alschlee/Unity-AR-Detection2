@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 134b221d13c4b4225a31c349769f791e
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - arCameraManager: {instanceID: 0}
+  - onnxModelAsset: {instanceID: 0}
+  - debugRawImage: {instanceID: 0}
+  - debugText: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
