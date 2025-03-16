@@ -8,9 +8,6 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/0316.unity
     guid: 3b4eb0c53e1eb46749920ac06416de62
-  - enabled: 1
-    path: Assets/Scenes/SampleScene.unity
-    guid: 99c9720ab356a0642a771bea13969a05
   m_configObjects:
     UnityEditor.XR.ARKit.ARKitSettings: {fileID: 11400000, guid: b52a0addb0ee543bc87ae7b323ba782b, type: 2}
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
