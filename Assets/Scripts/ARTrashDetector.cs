@@ -29,6 +29,28 @@ public class ARTrashDetector : MonoBehaviour
         "Pop tab", "Straw", "Styrofoam piece", "Unlabeled litter"
     };
 
+    private Dictionary<string, Color> trashClassColors = new Dictionary<string, Color>()
+    {
+        { "Aluminium foil", new Color(0.8f, 0.8f, 0.8f) },
+        { "Bottle cap", new Color(0.0f, 0.5f, 1.0f) },          // 파란색
+        { "Bottle", new Color(0.0f, 0.7f, 0.9f) },              // 밝은 파란색
+        { "Broken glass", new Color(0.9f, 0.9f, 1.0f) },        // 투명한 흰색
+        { "Can", new Color(0.7f, 0.7f, 0.7f) },                 // 회색
+        { "Carton", new Color(0.8f, 0.5f, 0.2f) },              // 갈색
+        { "Cigarette", new Color(1.0f, 0.6f, 0.6f) },           // 살색
+        { "Cup", new Color(1.0f, 0.0f, 0.0f) },                 // 빨간색
+        { "Lid", new Color(0.0f, 0.8f, 0.8f) },                 // 청록색
+        { "Other litter", new Color(0.5f, 0.5f, 0.5f) },        // 중간 회색
+        { "Other plastic", new Color(1.0f, 1.0f, 0.0f) },       // 노란색
+        { "Paper", new Color(1.0f, 1.0f, 0.8f) },               // 흰색에 가까운 노란색
+        { "Plastic bag - wrapper", new Color(1.0f, 0.0f, 1.0f) },// 보라색
+        { "Plastic container", new Color(0.0f, 1.0f, 0.5f) },   // 연두색
+        { "Pop tab", new Color(0.6f, 0.3f, 0.1f) },             // 갈색
+        { "Straw", new Color(1.0f, 0.6f, 0.0f) },               // 주황색
+        { "Styrofoam piece", new Color(1.0f, 1.0f, 1.0f) },     // 흰색
+        { "Unlabeled litter", new Color(0.4f, 0.4f, 0.4f) }     // 어두운 
+    };
+
     void Start()
     {
         if (arCameraManager == null)
@@ -181,7 +203,7 @@ public class ARTrashDetector : MonoBehaviour
                     string detectionText = $"감지된 쓰레기: {className} ({maxProb:P1})";
                     Debug.Log($"모델 추론 완료: bbox=({x:F2}, {y:F2}, {w:F2}, {h:F2}), class: {className} ({maxProb:P1})");
                     
-                    DisplayImprovedBoundingBox(x, y, w, h, detectionText);
+                    DisplayImprovedBoundingBox(x, y, w, h, detectionText, className);
                 }
 
                 bboxOutput.Dispose();
@@ -197,7 +219,7 @@ public class ARTrashDetector : MonoBehaviour
         Destroy(resized);
     }
     
-    private void DisplayImprovedBoundingBox(float x, float y, float width, float height, string text)
+    private void DisplayImprovedBoundingBox(float x, float y, float width, float height, string text, string className)
     {
         Camera arCamera = arCameraManager.GetComponent<Camera>();
     
@@ -225,6 +247,15 @@ public class ARTrashDetector : MonoBehaviour
     
         if (boxLineRenderer != null)
         {
+            Color boxColor = Color.green; // 기본 색상
+            if (trashClassColors.ContainsKey(className))
+            {
+                boxColor = trashClassColors[className];
+            }
+
+            boxLineRenderer.startColor = boxColor;
+            boxLineRenderer.endColor = boxColor;
+
             boxLineRenderer.SetPosition(0, worldCorners[0]);
             boxLineRenderer.SetPosition(1, worldCorners[1]);
             boxLineRenderer.SetPosition(2, worldCorners[2]);
@@ -233,6 +264,8 @@ public class ARTrashDetector : MonoBehaviour
         
             currentBboxObject.transform.position = Vector3.zero;
             currentBboxObject.SetActive(true);
+
+            Debug.Log($"클래스 '{className}'에 대한 색상: R={boxColor.r:F2}, G={boxColor.g:F2}, B={boxColor.b:F2}");
         }
     
         if (currentDebugText == null && debugTextPrefab != null)
