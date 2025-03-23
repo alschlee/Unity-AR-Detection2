@@ -13,9 +13,9 @@ public class ARTrashDetector : MonoBehaviour
     public Text debugTextPrefab;
     public Canvas uiCanvas;
     
-    public float confidenceThreshold = 0.7f;
+    public float confidenceThreshold = 0.6f;
     public float maxBoundingBoxDistance = 5.0f;
-    public float iouThreshold = 0.5f;
+    public float iouThreshold = 0.4f;
 
     private Model runtimeModel;
     private IWorker worker;
@@ -71,20 +71,32 @@ public class ARTrashDetector : MonoBehaviour
     }
 
     void Start()
+{
+    if (uiCanvas != null)
     {
-        if (arCameraManager == null)
-        {
-            Debug.LogError("[ARTrashDetector] arCameraManager가 null입니다!");
-            return;
-        }
-        
-        Debug.Log("[ARTrashDetector] arCameraManager 할당됨: " + arCameraManager.name);
-
-        // Barracuda 모델 로드
-        runtimeModel = ModelLoader.Load(onnxModelAsset);
-        worker = WorkerFactory.CreateWorker(WorkerFactory.Type.ComputePrecompiled, runtimeModel);
-        Debug.Log("ONNX 모델 로드 완료");
+        Camera arCam = arCameraManager.GetComponent<Camera>();
+        uiCanvas.worldCamera = arCam;
+        Debug.Log("uiCanvas의 Render Camera로 " + arCam.name + " 할당됨");
     }
+    else
+    {
+        Debug.LogError("uiCanvas가 null입니다!");
+    }
+
+    if (arCameraManager == null)
+    {
+        Debug.LogError("[ARTrashDetector] arCameraManager가 null입니다!");
+        return;
+    }
+    
+    Debug.Log("[ARTrashDetector] arCameraManager 할당됨: " + arCameraManager.name);
+
+    // Barracuda 모델 로드
+    runtimeModel = ModelLoader.Load(onnxModelAsset);
+    worker = WorkerFactory.CreateWorker(WorkerFactory.Type.ComputePrecompiled, runtimeModel);
+    Debug.Log("ONNX 모델 로드 완료");
+}
+
 
     void OnEnable()
     {
@@ -120,8 +132,11 @@ public class ARTrashDetector : MonoBehaviour
 
     void GetViewportCorners()
     {
-        // Get the camera's viewport corners in world space
         Camera.main.CalculateFrustumCorners(new Rect(0, 0, 1, 1), 0, Camera.MonoOrStereoscopicEye.Mono, viewportCorners);
+        foreach (var corner in viewportCorners)
+        {
+            Debug.Log($"Viewport Corner: {corner}");
+        }
     }
     
     private void ClearBoundingBoxes()
@@ -176,7 +191,7 @@ public class ARTrashDetector : MonoBehaviour
             cpuImage.Dispose();
         }
 
-        // 이미지 크기 조정 (모델 입력 크기에 맞게)
+        // 이미지 크기 조정
         Texture2D resized = ScaleTexture(texture, IMG_WIDTH, IMG_HEIGHT);
 
         if (debugRawImage != null)
@@ -193,7 +208,7 @@ public class ARTrashDetector : MonoBehaviour
                 // 기존 바운딩 박스 삭제
                 ClearBoundingBoxes();
                 
-                // YOLO 출력 처리
+                // 출력 처리
                 List<Detection> detections = ProcessYoloOutput(output);
                 
                 // NMS(Non-Maximum Suppression) 적용
@@ -239,7 +254,7 @@ public class ARTrashDetector : MonoBehaviour
     {
         List<Detection> detections = new List<Detection>();
         
-        // YOLO 출력 형식: [배치, 높이, 너비, 채널]
+        // 출력 형식: [배치, 높이, 너비, 채널]
         // 채널 = 5 * NUM_BOXES + NUM_CLASSES (5 = (x, y, w, h, confidence))
         for (int cy = 0; cy < GRID_SIZE; cy++)
         {
@@ -274,7 +289,7 @@ public class ARTrashDetector : MonoBehaviour
                         // 최종 신뢰도 = 객체 존재 확률 * 클래스 확률
                         float finalConfidence = confidence * maxClassProb;
                         
-                        // 1. Confidence 값 디버깅 로그
+                        // Confidence 값 디버깅 로그
                         Debug.Log($"Confidence: {confidence:F3}, ClassProb: {maxClassProb:F3}, FinalConfidence: {finalConfidence:F3}");
                         
                         if (finalConfidence > confidenceThreshold)
@@ -303,37 +318,41 @@ public class ARTrashDetector : MonoBehaviour
     }
     
     private List<Detection> ApplyNMS(List<Detection> detections)
+{
+    // 신뢰도 순으로 정렬
+    detections.Sort((a, b) => b.confidence.CompareTo(a.confidence));
+    
+    // NMS 후 최대 3개 객체만 유지
+    List<Detection> result = new List<Detection>();
+    bool[] isSuppress = new bool[detections.Count];
+    int maxDetections = 3; // 최대 3개 객체로 제한
+    
+    for (int i = 0; i < detections.Count && result.Count < maxDetections; i++)
     {
-        // 신뢰도 순으로 정렬
-        detections.Sort((a, b) => b.confidence.CompareTo(a.confidence));
-        List<Detection> result = new List<Detection>();
-        bool[] isSuppress = new bool[detections.Count];
+        if (isSuppress[i])
+            continue;
         
-        for (int i = 0; i < detections.Count; i++)
+        result.Add(detections[i]);
+        
+        for (int j = i + 1; j < detections.Count; j++)
         {
-            if (isSuppress[i])
-                continue;
-            
-            result.Add(detections[i]);
-            
-            for (int j = i + 1; j < detections.Count; j++)
+            // 같은 클래스이고 IoU가 임계값보다 크면 제거
+            if (detections[i].classIndex == detections[j].classIndex)
             {
-                // 같은 클래스이고 IoU가 임계값보다 크면 제거
-                if (detections[i].classIndex == detections[j].classIndex)
+                float iou = CalculateIoU(detections[i], detections[j]);
+                if (iou > iouThreshold)
                 {
-                    float iou = CalculateIoU(detections[i], detections[j]);
-                    if (iou > iouThreshold)
-                    {
-                        isSuppress[j] = true;
-                    }
+                    isSuppress[j] = true;
                 }
             }
         }
-        
-        // 2. NMS 적용 전후 디버그 로그
-        Debug.Log($"Before NMS: {detections.Count}, After NMS: {result.Count}");
-        return result;
     }
+
+    // NMS 적용 전후 디버그 로그
+    Debug.Log($"Before NMS: {detections.Count}, After NMS: {result.Count}");
+    return result;
+}
+
     
     private float CalculateIoU(Detection a, Detection b)
     {
@@ -363,87 +382,84 @@ public class ARTrashDetector : MonoBehaviour
     }
     
     private void CreateBoundingBox(Detection detection)
+{
+    Camera arCamera = arCameraManager.GetComponent<Camera>();
+    
+    GameObject bboxObject = new GameObject($"BoundingBox_{detection.className}");
+    LineRenderer lineRenderer = bboxObject.AddComponent<LineRenderer>();
+    
+    lineRenderer.startWidth = 0.02f;
+    lineRenderer.endWidth = 0.02f;
+    lineRenderer.positionCount = 5;
+    lineRenderer.loop = true;
+    lineRenderer.material = new Material(Shader.Find("Sprites/Default"));
+    lineRenderer.startColor = detection.color;
+    lineRenderer.endColor = detection.color;
+    lineRenderer.useWorldSpace = true;
+
+    // 3. Bounding Box 좌표 변환 검증을 위한 값 확인
+    float halfWidth = detection.width / 2.0f;
+    float halfHeight = detection.height / 2.0f;
+
+    // 뷰포트 좌표(0~1 범위)를 계산
+    Vector2[] viewportCorners = new Vector2[4];
+    viewportCorners[0] = new Vector2(detection.x - halfWidth, detection.y - halfHeight); // 좌하단
+    viewportCorners[1] = new Vector2(detection.x + halfWidth, detection.y - halfHeight); // 우하단
+    viewportCorners[2] = new Vector2(detection.x + halfWidth, detection.y + halfHeight); // 우상단
+    viewportCorners[3] = new Vector2(detection.x - halfWidth, detection.y + halfHeight); // 좌상단
+
+    Vector3[] worldCorners = new Vector3[4];
+    for (int i = 0; i < 4; i++)
     {
-        Camera arCamera = arCameraManager.GetComponent<Camera>();
-    
-        GameObject bboxObject = new GameObject($"BoundingBox_{detection.className}");
-        LineRenderer lineRenderer = bboxObject.AddComponent<LineRenderer>();
-    
-        lineRenderer.startWidth = 0.02f;
-        lineRenderer.endWidth = 0.02f;
-        lineRenderer.positionCount = 5;
-        lineRenderer.loop = true;
-        lineRenderer.material = new Material(Shader.Find("Sprites/Default"));
-        lineRenderer.startColor = detection.color;
-        lineRenderer.endColor = detection.color;
-        lineRenderer.useWorldSpace = true;
-    
-        // 3. Bounding Box 좌표 변환 검증을 위한 값 확인
-        float halfWidth = detection.width / 2.0f;
-        float halfHeight = detection.height / 2.0f;
-    
-        //Vector2[] corners = new Vector2[4];
-        // corners[0] = new Vector2(detection.x - halfWidth, detection.y - halfHeight); // 좌하단
-        // corners[1] = new Vector2(detection.x + halfWidth, detection.y - halfHeight); // 우하단
-        // corners[2] = new Vector2(detection.x + halfWidth, detection.y + halfHeight); // 우상단
-        // corners[3] = new Vector2(detection.x - halfWidth, detection.y + halfHeight); // 좌상단
-
-        // 뷰포트 좌표(0~1 범위)를 계산합니다.
-        Vector2[] viewportCorners = new Vector2[4];
-        viewportCorners[0] = new Vector2(detection.x - halfWidth, detection.y - halfHeight); // 좌하단
-        viewportCorners[1] = new Vector2(detection.x + halfWidth, detection.y - halfHeight); // 우하단
-        viewportCorners[2] = new Vector2(detection.x + halfWidth, detection.y + halfHeight); // 우상단
-        viewportCorners[3] = new Vector2(detection.x - halfWidth, detection.y + halfHeight); // 좌상단
-    
-        // Vector3[] worldCorners = new Vector3[4];
-        // for (int i = 0; i < 4; i++)
-        // {
-        //     Vector3 screenPos = new Vector3(
-        //         corners[i].x * Screen.width,
-        //         corners[i].y * Screen.height,
-        //         maxBoundingBoxDistance
-        //     );
-        //     // 4. 변환된 스크린 좌표 로그 출력
-        //     Debug.Log($"ScreenPos[{i}]: {screenPos}");
-        //     worldCorners[i] = arCamera.ScreenToWorldPoint(screenPos);
-        // }
-
-        Vector3[] worldCorners = new Vector3[4];
-        for (int i = 0; i < 4; i++)
-        {
-            // 뷰포트 좌표를 월드 좌표로 변환 (z값은 AR 카메라에서의 거리)
-            Vector3 viewportPos = new Vector3(viewportCorners[i].x, viewportCorners[i].y, maxBoundingBoxDistance);
-            worldCorners[i] = arCamera.ViewportToWorldPoint(viewportPos);
-            Debug.Log($"ViewportPos[{i}]: {viewportPos} -> WorldPos: {worldCorners[i]}");
-        }
-    
-        lineRenderer.SetPosition(0, worldCorners[0]);
-        lineRenderer.SetPosition(1, worldCorners[1]);
-        lineRenderer.SetPosition(2, worldCorners[2]);
-        lineRenderer.SetPosition(3, worldCorners[3]);
-        lineRenderer.SetPosition(4, worldCorners[0]);
-    
-        boundingBoxes.Add(bboxObject);
-    
-        if (debugTextPrefab != null && uiCanvas != null)
-        {
-            Text classText = Instantiate(debugTextPrefab, uiCanvas.transform);
-            classText.text = $"{detection.className} ({detection.confidence:P1})";
-            classText.color = detection.color;
-    
-            // RectTransform textRT = classText.GetComponent<RectTransform>();
-            // Vector2 textScreenPos = new Vector2(
-            //     detection.x * Screen.width,
-            //     (detection.y + halfHeight) * Screen.height + 20
-            // );
-            // textRT.position = textScreenPos;
-
-            // 뷰포트 좌표를 스크린 좌표로 변환
-            Vector3 screenPos = arCamera.ViewportToScreenPoint(new Vector3(detection.x, detection.y + halfHeight, maxBoundingBoxDistance));
-            RectTransform textRT = classText.GetComponent<RectTransform>();
-            textRT.position = new Vector2(screenPos.x, screenPos.y + 20); // 약간 위쪽 오프셋
-    
-            classTexts.Add(classText);
-        }
+        // 뷰포트 좌표를 월드 좌표로 변환 (z값은 AR 카메라에서의 거리)
+        Vector3 viewportPos = new Vector3(viewportCorners[i].x, viewportCorners[i].y, maxBoundingBoxDistance);
+        worldCorners[i] = arCamera.ViewportToWorldPoint(viewportPos);
+        Debug.Log($"ViewportPos[{i}]: {viewportPos} -> WorldPos: {worldCorners[i]}");
     }
+
+    lineRenderer.SetPosition(0, worldCorners[0]);
+    lineRenderer.SetPosition(1, worldCorners[1]);
+    lineRenderer.SetPosition(2, worldCorners[2]);
+    lineRenderer.SetPosition(3, worldCorners[3]);
+    lineRenderer.SetPosition(4, worldCorners[0]);
+
+    boundingBoxes.Add(bboxObject);
+
+    if (debugTextPrefab != null && uiCanvas != null)
+{
+    Text classText = Instantiate(debugTextPrefab, uiCanvas.transform);
+    classText.text = $"{detection.className} ({detection.confidence:P1})";
+    classText.color = Color.red;  
+    classText.fontSize = 40;
+    Debug.Log($"클래스 이름: {detection.className}, 신뢰도: {detection.confidence:P1}");
+
+    // 변환된 화면 좌표 확인
+    Vector3 screenPos = arCamera.ViewportToScreenPoint(new Vector3(detection.x, detection.y + detection.height / 2.0f + 0.05f, maxBoundingBoxDistance));
+    Debug.Log($"텍스트 화면 좌표: {screenPos}");
+
+    // 캔버스 Rect 정보 출력
+    RectTransform canvasRect = uiCanvas.GetComponent<RectTransform>();
+    Debug.Log("캔버스 Rect: " + canvasRect.rect);
+
+    RectTransform textRT = classText.GetComponent<RectTransform>();
+    Vector2 anchoredPos;
+    if (RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screenPos, arCamera, out anchoredPos))
+    {
+        textRT.anchoredPosition = anchoredPos;
+        Debug.Log("anchoredPosition 설정됨: " + anchoredPos);
+    }
+    else
+    {
+        Debug.LogWarning("Screen to LocalPoint 변환 실패!");
+    }
+
+    // 임시 테스트: 텍스트를 캔버스 중앙에 배치하여 보이는지 확인
+    //textRT.anchoredPosition = Vector2.zero;
+    //Debug.Log("임시로 텍스트를 캔버스 중앙에 배치");
+
+    classTexts.Add(classText);
+}
+
+}
+
 }
