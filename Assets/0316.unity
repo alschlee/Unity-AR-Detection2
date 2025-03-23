@@ -147,7 +147,7 @@ RectTransform:
   m_GameObject: {fileID: 101794939}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1.09, y: 1.09, z: 1.09}
+  m_LocalScale: {x: 0, y: 0, z: 0}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 553204437}
@@ -156,9 +156,9 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 0}
-  m_AnchoredPosition: {x: 436, y: 274.5}
-  m_SizeDelta: {x: 800, y: 503.6697}
-  m_Pivot: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 0, y: 0}
+  m_Pivot: {x: 0, y: 0}
 --- !u!114 &101794941
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -198,7 +198,7 @@ MonoBehaviour:
   m_FallbackScreenDPI: 96
   m_DefaultSpriteDPI: 96
   m_DynamicPixelsPerUnit: 1
-  m_PresetInfoIsWorld: 1
+  m_PresetInfoIsWorld: 0
 --- !u!223 &101794943
 Canvas:
   m_ObjectHideFlags: 0
@@ -208,7 +208,7 @@ Canvas:
   m_GameObject: {fileID: 101794939}
   m_Enabled: 1
   serializedVersion: 3
-  m_RenderMode: 2
+  m_RenderMode: 0
   m_Camera: {fileID: 107093229}
   m_PlaneDistance: 100
   m_PixelPerfect: 0
@@ -252,10 +252,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   arCameraManager: {fileID: 107093227}
-  onnxModelAsset: {fileID: 5022602860645237092, guid: 110b48aeab4284bbba753c4546bd98fe, type: 3}
+  onnxModelAsset: {fileID: 5022602860645237092, guid: 8131c1d2c5e834e73b1405aa690e4fb0, type: 3}
   debugRawImage: {fileID: 374572827}
   debugTextPrefab: {fileID: 1970184706}
+  uiCanvas: {fileID: 101794943}
+  confidenceThreshold: 0.7
   maxBoundingBoxDistance: 5
+  iouThreshold: 0.5
 --- !u!4 &106114858
 Transform:
   m_ObjectHideFlags: 0
@@ -709,8 +712,20 @@ PrefabInstance:
       value: TextPrefab
       objectReference: {fileID: 0}
     - target: {fileID: 3876628157636020631, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
-      propertyPath: m_FontData.m_Alignment
+      propertyPath: m_Color.b
       value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3876628157636020631, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
+      propertyPath: m_Color.g
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3876628157636020631, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
+      propertyPath: m_Color.r
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3876628157636020631, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
+      propertyPath: m_FontData.m_Alignment
+      value: 3
       objectReference: {fileID: 0}
     - target: {fileID: 4896379401747802267, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
       propertyPath: m_Pivot.x
@@ -743,6 +758,18 @@ PrefabInstance:
     - target: {fileID: 4896379401747802267, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
       propertyPath: m_SizeDelta.y
       value: 30
+      objectReference: {fileID: 0}
+    - target: {fileID: 4896379401747802267, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
+      propertyPath: m_LocalScale.x
+      value: 0.54041
+      objectReference: {fileID: 0}
+    - target: {fileID: 4896379401747802267, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
+      propertyPath: m_LocalScale.y
+      value: 0.54041
+      objectReference: {fileID: 0}
+    - target: {fileID: 4896379401747802267, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
+      propertyPath: m_LocalScale.z
+      value: 0.54041
       objectReference: {fileID: 0}
     - target: {fileID: 4896379401747802267, guid: 1de6f2ad4ab5f43b692fa67863c91cc5, type: 3}
       propertyPath: m_LocalPosition.x

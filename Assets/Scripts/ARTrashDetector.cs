@@ -11,16 +11,25 @@ public class ARTrashDetector : MonoBehaviour
     public NNModel onnxModelAsset;
     public RawImage debugRawImage;
     public Text debugTextPrefab;
+    public Canvas uiCanvas;
     
+    public float confidenceThreshold = 0.7f;
     public float maxBoundingBoxDistance = 5.0f;
-    
+    public float iouThreshold = 0.5f;
+
     private Model runtimeModel;
     private IWorker worker;
     private const int IMG_WIDTH = 224;
     private const int IMG_HEIGHT = 224;
-    private GameObject currentBboxObject;
-    private Text currentDebugText;
-    private LineRenderer boxLineRenderer;
+    private const int GRID_SIZE = 7;
+    private const int NUM_BOXES = 2;
+    private const int NUM_CLASSES = 18;
+    
+    private List<GameObject> boundingBoxes = new List<GameObject>();
+    private List<Text> classTexts = new List<Text>();
+
+    //
+    private Vector3[] viewportCorners = new Vector3[4];
     
     private readonly string[] trashCategories = {
         "Aluminium foil", "Bottle cap", "Bottle", "Broken glass", "Can", 
@@ -32,55 +41,49 @@ public class ARTrashDetector : MonoBehaviour
     private Dictionary<string, Color> trashClassColors = new Dictionary<string, Color>()
     {
         { "Aluminium foil", new Color(0.8f, 0.8f, 0.8f) },
-        { "Bottle cap", new Color(0.0f, 0.5f, 1.0f) },          // 파란색
-        { "Bottle", new Color(0.0f, 0.7f, 0.9f) },              // 밝은 파란색
-        { "Broken glass", new Color(0.9f, 0.9f, 1.0f) },        // 투명한 흰색
-        { "Can", new Color(0.7f, 0.7f, 0.7f) },                 // 회색
-        { "Carton", new Color(0.8f, 0.5f, 0.2f) },              // 갈색
-        { "Cigarette", new Color(1.0f, 0.6f, 0.6f) },           // 살색
-        { "Cup", new Color(1.0f, 0.0f, 0.0f) },                 // 빨간색
-        { "Lid", new Color(0.0f, 0.8f, 0.8f) },                 // 청록색
-        { "Other litter", new Color(0.5f, 0.5f, 0.5f) },        // 중간 회색
-        { "Other plastic", new Color(1.0f, 1.0f, 0.0f) },       // 노란색
-        { "Paper", new Color(1.0f, 1.0f, 0.8f) },               // 흰색에 가까운 노란색
-        { "Plastic bag - wrapper", new Color(1.0f, 0.0f, 1.0f) },// 보라색
-        { "Plastic container", new Color(0.0f, 1.0f, 0.5f) },   // 연두색
-        { "Pop tab", new Color(0.6f, 0.3f, 0.1f) },             // 갈색
-        { "Straw", new Color(1.0f, 0.6f, 0.0f) },               // 주황색
-        { "Styrofoam piece", new Color(1.0f, 1.0f, 1.0f) },     // 흰색
-        { "Unlabeled litter", new Color(0.4f, 0.4f, 0.4f) }     // 어두운 
+        { "Bottle cap", new Color(0.0f, 0.5f, 1.0f) },
+        { "Bottle", new Color(0.0f, 0.7f, 0.9f) },
+        { "Broken glass", new Color(0.9f, 0.9f, 1.0f) },
+        { "Can", new Color(0.7f, 0.7f, 0.7f) },
+        { "Carton", new Color(0.8f, 0.5f, 0.2f) },
+        { "Cigarette", new Color(1.0f, 0.6f, 0.6f) },
+        { "Cup", new Color(1.0f, 0.0f, 0.0f) },
+        { "Lid", new Color(0.0f, 0.8f, 0.8f) },
+        { "Other litter", new Color(0.5f, 0.5f, 0.5f) },
+        { "Other plastic", new Color(1.0f, 1.0f, 0.0f) },
+        { "Paper", new Color(1.0f, 1.0f, 0.8f) },
+        { "Plastic bag - wrapper", new Color(1.0f, 0.0f, 1.0f) },
+        { "Plastic container", new Color(0.0f, 1.0f, 0.5f) },
+        { "Pop tab", new Color(0.6f, 0.3f, 0.1f) },
+        { "Straw", new Color(1.0f, 0.6f, 0.0f) },
+        { "Styrofoam piece", new Color(1.0f, 1.0f, 1.0f) },
+        { "Unlabeled litter", new Color(0.4f, 0.4f, 0.4f) }
     };
+
+    // YOLO 출력에서 추출한 객체 정보를 담을 클래스
+    private class Detection
+    {
+        public float x, y, width, height;
+        public float confidence;
+        public int classIndex;
+        public string className;
+        public Color color;
+    }
 
     void Start()
     {
         if (arCameraManager == null)
+        {
             Debug.LogError("[ARTrashDetector] arCameraManager가 null입니다!");
-        else
-            Debug.Log("[ARTrashDetector] arCameraManager 할당됨: " + arCameraManager.name);
+            return;
+        }
+        
+        Debug.Log("[ARTrashDetector] arCameraManager 할당됨: " + arCameraManager.name);
 
-        InitializeBoundingBox();
-
+        // Barracuda 모델 로드
         runtimeModel = ModelLoader.Load(onnxModelAsset);
         worker = WorkerFactory.CreateWorker(WorkerFactory.Type.ComputePrecompiled, runtimeModel);
         Debug.Log("ONNX 모델 로드 완료");
-    }
-
-    private void InitializeBoundingBox()
-    {
-        currentBboxObject = new GameObject("BoundingBox");
-        boxLineRenderer = currentBboxObject.AddComponent<LineRenderer>();
-
-        // LineRenderer 설정
-        boxLineRenderer.startWidth = 0.02f;
-        boxLineRenderer.endWidth = 0.02f;
-        boxLineRenderer.positionCount = 5;
-        boxLineRenderer.loop = true;
-        boxLineRenderer.material = new Material(Shader.Find("Sprites/Default"));
-        boxLineRenderer.startColor = Color.green;
-        boxLineRenderer.endColor = Color.green;
-        boxLineRenderer.useWorldSpace = true;
-        
-        currentBboxObject.SetActive(false);
     }
 
     void OnEnable()
@@ -100,23 +103,52 @@ public class ARTrashDetector : MonoBehaviour
         if (arCameraManager != null)
         {
             arCameraManager.frameReceived -= OnCameraFrameReceived;
-            Debug.Log("AR 카메라 프레임 수신 이벤트 해제 완료");
         }
+        
         worker?.Dispose();
         Debug.Log("워커 리소스 해제");
+        
+        // 모든 바운딩 박스 제거
+        ClearBoundingBoxes();
+    }
+    
+    void OnDestroy()
+    {
+        worker?.Dispose();
+        ClearBoundingBoxes();
+    }
+
+    void GetViewportCorners()
+    {
+        // Get the camera's viewport corners in world space
+        Camera.main.CalculateFrustumCorners(new Rect(0, 0, 1, 1), 0, Camera.MonoOrStereoscopicEye.Mono, viewportCorners);
+    }
+    
+    private void ClearBoundingBoxes()
+    {
+        foreach (var box in boundingBoxes)
+        {
+            if (box != null)
+                Destroy(box);
+        }
+        boundingBoxes.Clear();
+        
+        foreach (var text in classTexts)
+        {
+            if (text != null)
+                Destroy(text.gameObject);
+        }
+        classTexts.Clear();
     }
 
     void OnCameraFrameReceived(ARCameraFrameEventArgs eventArgs)
     {
-        Debug.Log("새로운 AR 프레임 수신");
-
         XRCpuImage cpuImage;
         if (!arCameraManager.TryAcquireLatestCpuImage(out cpuImage))
         {
             Debug.LogError("AR 프레임을 가져오는 데 실패했습니다.");
             return;
         }
-        Debug.Log("CPU 이미지 획득 성공");
 
         var conversionParams = new XRCpuImage.ConversionParams
         {
@@ -132,7 +164,6 @@ public class ARTrashDetector : MonoBehaviour
         {
             cpuImage.Convert(conversionParams, rawTextureData);
             texture.Apply();
-            Debug.Log("CPU 이미지 변환 및 텍스처 적용 완료");
         }
         catch (System.Exception e)
         {
@@ -145,69 +176,36 @@ public class ARTrashDetector : MonoBehaviour
             cpuImage.Dispose();
         }
 
+        // 이미지 크기 조정 (모델 입력 크기에 맞게)
         Texture2D resized = ScaleTexture(texture, IMG_WIDTH, IMG_HEIGHT);
-        Debug.Log("텍스처 리사이즈 완료");
 
         if (debugRawImage != null)
             debugRawImage.texture = resized;
 
+        // 모델 추론 실행
         using (Tensor input = new Tensor(resized, channels: 3))
         {
             try
             {
                 worker.Execute(input);
-        
-                Tensor bboxOutput = worker.PeekOutput("output_0");
-                Tensor classOutput = worker.PeekOutput("output_1");
-
-                float x = bboxOutput[0];
-                float y = bboxOutput[1];
-                float w = bboxOutput[2];
-                float h = bboxOutput[3];
-        
-                string classProbabilities = "";
-                for (int i = 0; i < classOutput.length; i++)
+                Tensor output = worker.PeekOutput("output");
+                
+                // 기존 바운딩 박스 삭제
+                ClearBoundingBoxes();
+                
+                // YOLO 출력 처리
+                List<Detection> detections = ProcessYoloOutput(output);
+                
+                // NMS(Non-Maximum Suppression) 적용
+                detections = ApplyNMS(detections);
+                
+                // 바운딩 박스 표시
+                foreach (var detection in detections)
                 {
-                    classProbabilities += $"[{i}]={classOutput[i]:F3} ";
+                    CreateBoundingBox(detection);
                 }
-                Debug.Log("클래스 확률 분포: " + classProbabilities);
-
-                int classIndex = 0;
-                float maxProb = 0f;
-                for (int i = 0; i < classOutput.length; i++)
-                {
-                    if (classOutput[i] > maxProb)
-                    {
-                        maxProb = classOutput[i];
-                        classIndex = i;
-                    }
-                }
-        
-                string className = trashCategories[classIndex];
-        
-                float detectionThreshold = 0.9f;
-                if (maxProb < detectionThreshold)
-                {
-                    if (currentBboxObject != null)
-                    {
-                        currentBboxObject.SetActive(false);
-                    }
-                    if (currentDebugText != null)
-                    {
-                        currentDebugText.gameObject.SetActive(false);
-                    }
-                    Debug.Log("객체 감지 실패 (신뢰도 낮음)");
-                }
-                else
-                {
-                    string detectionText = $"감지된 쓰레기: {className} ({maxProb:P1})";
-                    Debug.Log($"모델 추론 완료: bbox=({x:F2}, {y:F2}, {w:F2}, {h:F2}), class: {className} ({maxProb:P1})");
-                    
-                    DisplayImprovedBoundingBox(x, y, w, h, detectionText, className);
-                }
-
-                bboxOutput.Dispose();
-                classOutput.Dispose();
+                
+                output.Dispose();
             }
             catch (System.Exception e)
             {
@@ -219,115 +217,233 @@ public class ARTrashDetector : MonoBehaviour
         Destroy(resized);
     }
     
-    private void DisplayImprovedBoundingBox(float x, float y, float width, float height, string text, string className)
+    private Texture2D ScaleTexture(Texture2D source, int targetWidth, int targetHeight)
+    {
+        RenderTexture rt = RenderTexture.GetTemporary(targetWidth, targetHeight);
+        Graphics.Blit(source, rt);
+        
+        RenderTexture previousRT = RenderTexture.active;
+        RenderTexture.active = rt;
+        
+        Texture2D result = new Texture2D(targetWidth, targetHeight);
+        result.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
+        result.Apply();
+        
+        RenderTexture.active = previousRT;
+        RenderTexture.ReleaseTemporary(rt);
+        
+        return result;
+    }
+    
+    private List<Detection> ProcessYoloOutput(Tensor output)
+    {
+        List<Detection> detections = new List<Detection>();
+        
+        // YOLO 출력 형식: [배치, 높이, 너비, 채널]
+        // 채널 = 5 * NUM_BOXES + NUM_CLASSES (5 = (x, y, w, h, confidence))
+        for (int cy = 0; cy < GRID_SIZE; cy++)
+        {
+            for (int cx = 0; cx < GRID_SIZE; cx++)
+            {
+                for (int b = 0; b < NUM_BOXES; b++)
+                {
+                    int offset = 5 * b;
+                    float confidence = output[0, cy, cx, offset + 4];
+                    
+                    if (confidence > confidenceThreshold)
+                    {
+                        float x = (output[0, cy, cx, offset] + cx) / GRID_SIZE;
+                        float y = (output[0, cy, cx, offset + 1] + cy) / GRID_SIZE;
+                        float width = Mathf.Exp(output[0, cy, cx, offset + 2]) / GRID_SIZE;
+                        float height = Mathf.Exp(output[0, cy, cx, offset + 3]) / GRID_SIZE;
+                        
+                        int classOffset = 5 * NUM_BOXES;
+                        float maxClassProb = 0;
+                        int maxClassIndex = 0;
+                        
+                        for (int c = 0; c < NUM_CLASSES; c++)
+                        {
+                            float classProb = output[0, cy, cx, classOffset + c];
+                            if (classProb > maxClassProb)
+                            {
+                                maxClassProb = classProb;
+                                maxClassIndex = c;
+                            }
+                        }
+                        
+                        // 최종 신뢰도 = 객체 존재 확률 * 클래스 확률
+                        float finalConfidence = confidence * maxClassProb;
+                        
+                        // 1. Confidence 값 디버깅 로그
+                        Debug.Log($"Confidence: {confidence:F3}, ClassProb: {maxClassProb:F3}, FinalConfidence: {finalConfidence:F3}");
+                        
+                        if (finalConfidence > confidenceThreshold)
+                        {
+                            string className = trashCategories[maxClassIndex];
+                            Color color = trashClassColors.ContainsKey(className) ? trashClassColors[className] : Color.green;
+                            
+                            detections.Add(new Detection
+                            {
+                                x = x,
+                                y = y,
+                                width = width,
+                                height = height,
+                                confidence = finalConfidence,
+                                classIndex = maxClassIndex,
+                                className = className,
+                                color = color
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        return detections;
+    }
+    
+    private List<Detection> ApplyNMS(List<Detection> detections)
+    {
+        // 신뢰도 순으로 정렬
+        detections.Sort((a, b) => b.confidence.CompareTo(a.confidence));
+        List<Detection> result = new List<Detection>();
+        bool[] isSuppress = new bool[detections.Count];
+        
+        for (int i = 0; i < detections.Count; i++)
+        {
+            if (isSuppress[i])
+                continue;
+            
+            result.Add(detections[i]);
+            
+            for (int j = i + 1; j < detections.Count; j++)
+            {
+                // 같은 클래스이고 IoU가 임계값보다 크면 제거
+                if (detections[i].classIndex == detections[j].classIndex)
+                {
+                    float iou = CalculateIoU(detections[i], detections[j]);
+                    if (iou > iouThreshold)
+                    {
+                        isSuppress[j] = true;
+                    }
+                }
+            }
+        }
+        
+        // 2. NMS 적용 전후 디버그 로그
+        Debug.Log($"Before NMS: {detections.Count}, After NMS: {result.Count}");
+        return result;
+    }
+    
+    private float CalculateIoU(Detection a, Detection b)
+    {
+        float aLeft = a.x - a.width / 2;
+        float aRight = a.x + a.width / 2;
+        float aTop = a.y + a.height / 2;
+        float aBottom = a.y - a.height / 2;
+        
+        float bLeft = b.x - b.width / 2;
+        float bRight = b.x + b.width / 2;
+        float bTop = b.y + b.height / 2;
+        float bBottom = b.y - b.height / 2;
+        
+        float interLeft = Mathf.Max(aLeft, bLeft);
+        float interRight = Mathf.Min(aRight, bRight);
+        float interTop = Mathf.Min(aTop, bTop);
+        float interBottom = Mathf.Max(aBottom, bBottom);
+        
+        if (interLeft > interRight || interBottom > interTop)
+            return 0;
+        
+        float interArea = (interRight - interLeft) * (interTop - interBottom);
+        float aArea = (aRight - aLeft) * (aTop - aBottom);
+        float bArea = (bRight - bLeft) * (bTop - bBottom);
+        
+        return interArea / (aArea + bArea - interArea);
+    }
+    
+    private void CreateBoundingBox(Detection detection)
     {
         Camera arCamera = arCameraManager.GetComponent<Camera>();
     
-        float depth = maxBoundingBoxDistance;
+        GameObject bboxObject = new GameObject($"BoundingBox_{detection.className}");
+        LineRenderer lineRenderer = bboxObject.AddComponent<LineRenderer>();
     
-        float halfWidth = width / 2.0f;
-        float halfHeight = height / 2.0f;
+        lineRenderer.startWidth = 0.02f;
+        lineRenderer.endWidth = 0.02f;
+        lineRenderer.positionCount = 5;
+        lineRenderer.loop = true;
+        lineRenderer.material = new Material(Shader.Find("Sprites/Default"));
+        lineRenderer.startColor = detection.color;
+        lineRenderer.endColor = detection.color;
+        lineRenderer.useWorldSpace = true;
     
-        Vector2[] corners = new Vector2[4];
-        corners[0] = new Vector2(x - halfWidth, y - halfHeight); // 좌하단
-        corners[1] = new Vector2(x + halfWidth, y - halfHeight); // 우하단
-        corners[2] = new Vector2(x + halfWidth, y + halfHeight); // 우상단
-        corners[3] = new Vector2(x - halfWidth, y + halfHeight); // 좌상단
+        // 3. Bounding Box 좌표 변환 검증을 위한 값 확인
+        float halfWidth = detection.width / 2.0f;
+        float halfHeight = detection.height / 2.0f;
     
+        //Vector2[] corners = new Vector2[4];
+        // corners[0] = new Vector2(detection.x - halfWidth, detection.y - halfHeight); // 좌하단
+        // corners[1] = new Vector2(detection.x + halfWidth, detection.y - halfHeight); // 우하단
+        // corners[2] = new Vector2(detection.x + halfWidth, detection.y + halfHeight); // 우상단
+        // corners[3] = new Vector2(detection.x - halfWidth, detection.y + halfHeight); // 좌상단
+
+        // 뷰포트 좌표(0~1 범위)를 계산합니다.
+        Vector2[] viewportCorners = new Vector2[4];
+        viewportCorners[0] = new Vector2(detection.x - halfWidth, detection.y - halfHeight); // 좌하단
+        viewportCorners[1] = new Vector2(detection.x + halfWidth, detection.y - halfHeight); // 우하단
+        viewportCorners[2] = new Vector2(detection.x + halfWidth, detection.y + halfHeight); // 우상단
+        viewportCorners[3] = new Vector2(detection.x - halfWidth, detection.y + halfHeight); // 좌상단
+    
+        // Vector3[] worldCorners = new Vector3[4];
+        // for (int i = 0; i < 4; i++)
+        // {
+        //     Vector3 screenPos = new Vector3(
+        //         corners[i].x * Screen.width,
+        //         corners[i].y * Screen.height,
+        //         maxBoundingBoxDistance
+        //     );
+        //     // 4. 변환된 스크린 좌표 로그 출력
+        //     Debug.Log($"ScreenPos[{i}]: {screenPos}");
+        //     worldCorners[i] = arCamera.ScreenToWorldPoint(screenPos);
+        // }
+
         Vector3[] worldCorners = new Vector3[4];
         for (int i = 0; i < 4; i++)
         {
-            Vector3 screenPos = new Vector3(
-                corners[i].x * Screen.width,
-                corners[i].y * Screen.height,
-                depth
-            );
-            worldCorners[i] = arCamera.ScreenToWorldPoint(screenPos);
+            // 뷰포트 좌표를 월드 좌표로 변환 (z값은 AR 카메라에서의 거리)
+            Vector3 viewportPos = new Vector3(viewportCorners[i].x, viewportCorners[i].y, maxBoundingBoxDistance);
+            worldCorners[i] = arCamera.ViewportToWorldPoint(viewportPos);
+            Debug.Log($"ViewportPos[{i}]: {viewportPos} -> WorldPos: {worldCorners[i]}");
         }
     
-        if (boxLineRenderer != null)
-        {
-            Color boxColor = Color.green; // 기본 색상
-            if (trashClassColors.ContainsKey(className))
-            {
-                boxColor = trashClassColors[className];
-            }
-
-            boxLineRenderer.startColor = boxColor;
-            boxLineRenderer.endColor = boxColor;
-
-            boxLineRenderer.SetPosition(0, worldCorners[0]);
-            boxLineRenderer.SetPosition(1, worldCorners[1]);
-            boxLineRenderer.SetPosition(2, worldCorners[2]);
-            boxLineRenderer.SetPosition(3, worldCorners[3]);
-            boxLineRenderer.SetPosition(4, worldCorners[0]);
-        
-            currentBboxObject.transform.position = Vector3.zero;
-            currentBboxObject.SetActive(true);
-
-            Debug.Log($"클래스 '{className}'에 대한 색상: R={boxColor.r:F2}, G={boxColor.g:F2}, B={boxColor.b:F2}");
-        }
+        lineRenderer.SetPosition(0, worldCorners[0]);
+        lineRenderer.SetPosition(1, worldCorners[1]);
+        lineRenderer.SetPosition(2, worldCorners[2]);
+        lineRenderer.SetPosition(3, worldCorners[3]);
+        lineRenderer.SetPosition(4, worldCorners[0]);
     
-        if (currentDebugText == null && debugTextPrefab != null)
-        {
-            GameObject textObj = Instantiate(debugTextPrefab.gameObject);
-            currentDebugText = textObj.GetComponent<Text>();
-        
-            currentDebugText.color = Color.white;
-            currentDebugText.fontStyle = FontStyle.Bold;
-            currentDebugText.alignment = TextAnchor.MiddleCenter;
-        
-            Shadow shadow = currentDebugText.gameObject.GetComponent<Shadow>();
-            if (shadow == null)
-            {
-                shadow = currentDebugText.gameObject.AddComponent<Shadow>();
-            }
-            shadow.effectColor = Color.black;
-            shadow.effectDistance = new Vector2(2f, -2f);
-        }
+        boundingBoxes.Add(bboxObject);
     
-        if (currentDebugText != null)
+        if (debugTextPrefab != null && uiCanvas != null)
         {
-            Vector3 centerPos = (worldCorners[0] + worldCorners[2]) / 2f;
-        
-            float boxHeight = Vector3.Distance(worldCorners[0], worldCorners[3]);
-            Vector3 textPos = centerPos + arCamera.transform.up * boxHeight * 0.5f;
-            currentDebugText.transform.position = textPos;
-        
-            currentDebugText.transform.rotation = arCamera.transform.rotation;
-        
-            currentDebugText.text = text;
-        
-            float distanceToCamera = Vector3.Distance(centerPos, arCamera.transform.position);
-            float textScaleFactor = distanceToCamera * 0.05f;
-            currentDebugText.transform.localScale = new Vector3(textScaleFactor, textScaleFactor, textScaleFactor);
-        
-            if (currentDebugText.canvas != null)
-            {
-                currentDebugText.canvas.sortingOrder = 999;
-            }
-        
-            currentDebugText.gameObject.SetActive(true);
-        
-            Debug.Log($"텍스트 설정: 위치={textPos}, 스케일={textScaleFactor}, 거리={distanceToCamera}");
-        }
-        else
-       {
-            Debug.LogError("디버그 텍스트를 생성하지 못했습니다. debugTextPrefab이 할당되었는지 확인하세요.");
-        }
-    }
+            Text classText = Instantiate(debugTextPrefab, uiCanvas.transform);
+            classText.text = $"{detection.className} ({detection.confidence:P1})";
+            classText.color = detection.color;
+    
+            // RectTransform textRT = classText.GetComponent<RectTransform>();
+            // Vector2 textScreenPos = new Vector2(
+            //     detection.x * Screen.width,
+            //     (detection.y + halfHeight) * Screen.height + 20
+            // );
+            // textRT.position = textScreenPos;
 
-
-    Texture2D ScaleTexture(Texture2D source, int targetWidth, int targetHeight)
-    {
-        RenderTexture rt = RenderTexture.GetTemporary(targetWidth, targetHeight);
-        RenderTexture.active = rt;
-        Graphics.Blit(source, rt);
-        Texture2D result = new Texture2D(targetWidth, targetHeight, source.format, false);
-        result.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
-        result.Apply();
-        RenderTexture.active = null;
-        RenderTexture.ReleaseTemporary(rt);
-        return result;
+            // 뷰포트 좌표를 스크린 좌표로 변환
+            Vector3 screenPos = arCamera.ViewportToScreenPoint(new Vector3(detection.x, detection.y + halfHeight, maxBoundingBoxDistance));
+            RectTransform textRT = classText.GetComponent<RectTransform>();
+            textRT.position = new Vector2(screenPos.x, screenPos.y + 20); // 약간 위쪽 오프셋
+    
+            classTexts.Add(classText);
+        }
     }
 }
